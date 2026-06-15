@@ -77,6 +77,7 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
     val openTabs by viewModel.openTabs.collectAsState()
     val activeTabPath by viewModel.activeTabPath.collectAsState()
     val activeContent by viewModel.activeFileContent.collectAsState()
+    val highlightedContent by viewModel.highlightedContent.collectAsState()
     val isFileModified by viewModel.isFileModified.collectAsState()
 
     // Layout configuration
@@ -143,7 +144,7 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                 },
                 onAICopilotClick = { viewModel.askAICopilot("AUTOCOMPLETE") },
                 onAICopilotExplain = { viewModel.askAICopilot("EXPLAIN") },
-                onToggleSidebar = { viewModel.isSidebarOpen.value = !viewModel.isSidebarOpen.value },
+                onToggleSidebar = { viewModel.toggleSidebar() },
                 onToggleTerminal = { viewModel.toggleTerminal() }
             )
 
@@ -199,7 +200,7 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                                         theme = activeTheme,
                                         onFileSelect = {
                                             viewModel.openFile(it)
-                                            viewModel.isSidebarOpen.value = false
+                                            viewModel.setSidebarOpen(false)
                                         },
                                         onCreateFileClick = {
                                             createTargetFolderName = ""
@@ -224,7 +225,7 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                                         onQueryChange = { viewModel.searchFiles(it) },
                                         onFileClick = {
                                             viewModel.openFile(it)
-                                            viewModel.isSidebarOpen.value = false
+                                            viewModel.setSidebarOpen(false)
                                         }
                                     )
                                 }
@@ -304,6 +305,7 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                                 content = activeContent,
                                 language = activeTabPath!!.substringAfterLast(".", "text"),
                                 theme = activeTheme,
+                                highlightedContent = highlightedContent,
                                 onContentChange = { viewModel.modifyActiveContent(it) }
                             )
                         } else {
@@ -340,7 +342,8 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                         ) {
                             VSCodeTermuxTerminal(
                                 terminalLines = viewModel.terminalLines.collectAsState().value,
-                                inputState = viewModel.terminalInput,
+                                terminalInput = viewModel.terminalInput.collectAsState().value,
+                                onValueChange = { viewModel.updateTerminalInput(it) },
                                 theme = activeTheme,
                                 onEnterCommand = { viewModel.executeTerminalCommand(it) }
                             )
@@ -497,35 +500,35 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                 Column {
                     OutlinedTextField(
                         value = viewModel.repoNameInput.collectAsState().value,
-                        onValueChange = { viewModel.repoNameInput.value = it },
+                        onValueChange = { viewModel.updateRepoName(it) },
                         label = { Text("Nama Repositori Lokal") },
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = activeTheme.accentColor, focusedTextColor = Color.White),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                     )
                     OutlinedTextField(
                         value = viewModel.repoUrlInput.collectAsState().value,
-                        onValueChange = { viewModel.repoUrlInput.value = it },
+                        onValueChange = { viewModel.updateRepoUrl(it) },
                         label = { Text("URL Remote Git (HTTPS)") },
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = activeTheme.accentColor, focusedTextColor = Color.White),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                     )
                     OutlinedTextField(
                         value = viewModel.repoBranchInput.collectAsState().value,
-                        onValueChange = { viewModel.repoBranchInput.value = it },
+                        onValueChange = { viewModel.updateRepoBranch(it) },
                         label = { Text("Branch Default") },
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = activeTheme.accentColor, focusedTextColor = Color.White),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                     )
                     OutlinedTextField(
                         value = viewModel.gitUsernameInput.collectAsState().value,
-                        onValueChange = { viewModel.gitUsernameInput.value = it },
+                        onValueChange = { viewModel.updateGitUsername(it) },
                         label = { Text("Username GitHub (Opsional)") },
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = activeTheme.accentColor, focusedTextColor = Color.White),
                         modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp)
                     )
                     OutlinedTextField(
                         value = viewModel.gitTokenInput.collectAsState().value,
-                        onValueChange = { viewModel.gitTokenInput.value = it },
+                        onValueChange = { viewModel.updateGitToken(it) },
                         label = { Text("Token Akses Pribadi / Password") },
                         visualTransformation = PasswordVisualTransformation(),
                         colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = activeTheme.accentColor, focusedTextColor = Color.White),
@@ -769,7 +772,7 @@ fun VSCodeExplorerPanel(
             }
         }
 
-        Divider(color = Color.DarkGray, thickness = 0.5.dp)
+        HorizontalDivider(color = Color.DarkGray, thickness = 0.5.dp)
 
         LazyColumn(
             modifier = Modifier
@@ -1273,10 +1276,36 @@ fun VSCodeCodeEditorArea(
     content: String,
     language: String,
     theme: EditorTheme,
+    highlightedContent: AnnotatedString?,
     onContentChange: (String) -> Unit
 ) {
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
+
+    val linesCount = content.split("\n").size
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val scrollY = scrollState.value
+
+    val visibleLineRange by remember(scrollY, linesCount) {
+        androidx.compose.runtime.derivedStateOf {
+            val lineHeightPx = with(density) { 18.dp.toPx() }
+            val firstVisible = (scrollY / lineHeightPx).toInt()
+            
+            val startLine = maxOf(0, firstVisible - 50)
+            val endLine = minOf(linesCount - 1, firstVisible + 40 + 50)
+            startLine..endLine
+        }
+    }
+
+    val transformedAnnotatedString by remember(content, visibleLineRange, highlightedContent, theme, language) {
+        androidx.compose.runtime.derivedStateOf {
+            if (highlightedContent != null && highlightedContent.text == content) {
+                highlightedContent
+            } else {
+                syntaxHighlight(content, language, theme, visibleLineRange)
+            }
+        }
+    }
 
     Row(
         modifier = Modifier
@@ -1285,7 +1314,6 @@ fun VSCodeCodeEditorArea(
             .verticalScroll(scrollState)
     ) {
         // Line Numbers list Column
-        val linesCount = content.split("\n").size
         Column(
             modifier = Modifier
                 .background(theme.editorBg.copy(alpha = 0.95f))
@@ -1324,7 +1352,7 @@ fun VSCodeCodeEditorArea(
             cursorBrush = SolidColor(theme.accentColor),
             visualTransformation = { text ->
                 TransformedText(
-                    syntaxHighlight(text.text, language, theme),
+                    transformedAnnotatedString,
                     OffsetMapping.Identity
                 )
             }
@@ -1409,13 +1437,14 @@ fun VSCodeShortcutHelperBar(
 @Composable
 fun VSCodeTermuxTerminal(
     terminalLines: List<CodeViewModel.TerminalLine>,
-    inputState: MutableStateFlow<String>,
+    terminalInput: String,
+    onValueChange: (String) -> Unit,
     theme: EditorTheme,
     onEnterCommand: (String) -> Unit
 ) {
     val scrollState = rememberLazyListState()
     val scope = rememberCoroutineScope()
-    val currentTypedText by inputState.collectAsState()
+    val currentTypedText = terminalInput
 
     // Auto scroll bottom when line counts changes
     LaunchedEffect(terminalLines.size) {
@@ -1452,7 +1481,7 @@ fun VSCodeTermuxTerminal(
             }
         }
 
-        Divider(color = Color.DarkGray.copy(alpha = 0.45f))
+        HorizontalDivider(color = Color.DarkGray.copy(alpha = 0.45f))
 
         // History content area
         LazyColumn(
@@ -1509,7 +1538,7 @@ fun VSCodeTermuxTerminal(
                 }
                 BasicTextField(
                     value = currentTypedText,
-                    onValueChange = { inputState.value = it },
+                    onValueChange = onValueChange,
                     textStyle = TextStyle(
                         color = Color.White,
                         fontFamily = FontFamily.Monospace,
@@ -1542,14 +1571,15 @@ fun VSCodeEmptyWorkspaceState(theme: EditorTheme) {
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(24.dp)
         ) {
-            Image(
+            Icon(
                 imageVector = Icons.Default.Code,
                 contentDescription = "VS Code Art Accent",
                 modifier = Modifier
                     .size(60.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .border(2.dp, theme.accentColor)
-                    .padding(8.dp)
+                    .padding(8.dp),
+                tint = theme.accentColor
             )
             Spacer(modifier = Modifier.height(14.dp))
             Text(
@@ -1612,44 +1642,116 @@ fun VSCodeCreateItemDialog(
     )
 }
 
-fun syntaxHighlight(code: String, language: String, theme: EditorTheme): AnnotatedString {
+private val COMMENT_REGEX_DEFAULT = "(//.*|/\\*[\\s\\S]*?\\*/)".toRegex()
+private val COMMENT_REGEX_PYTHON = "(#.*)".toRegex()
+private val STRING_DOUBLE_REGEX = "(\"[^\"]*\")".toRegex()
+private val STRING_SINGLE_REGEX = "('[^']*')".toRegex()
+private val NUMBER_REGEX = "\\b(\\d+)\\b".toRegex()
+
+private val KEYWORDS_JS = listOf("const", "let", "var", "function", "return", "if", "else", "for", "while", "class", "import", "export", "from", "default", "true", "false", "this")
+private val KEYWORDS_PY = listOf("def", "return", "if", "else", "elif", "for", "while", "import", "from", "in", "and", "or", "not", "True", "False", "None", "print")
+private val KEYWORDS_KT = listOf("package", "import", "fun", "val", "var", "if", "else", "for", "while", "return", "class", "object", "interface", "null", "true", "false", "when", "println")
+private val KEYWORDS_HTML = listOf("doctype", "html", "head", "body", "title", "style", "meta", "script", "div", "h1", "p", "button", "onclick")
+
+private val KEYWORD_REGEX_JS = "\\b(${KEYWORDS_JS.joinToString("|")})\\b".toRegex(RegexOption.IGNORE_CASE)
+private val KEYWORD_REGEX_PY = "\\b(${KEYWORDS_PY.joinToString("|")})\\b".toRegex(RegexOption.IGNORE_CASE)
+private val KEYWORD_REGEX_KT = "\\b(${KEYWORDS_KT.joinToString("|")})\\b".toRegex(RegexOption.IGNORE_CASE)
+private val KEYWORD_REGEX_HTML = "\\b(${KEYWORDS_HTML.joinToString("|")})\\b".toRegex(RegexOption.IGNORE_CASE)
+
+fun syntaxHighlight(
+    code: String,
+    language: String,
+    theme: EditorTheme,
+    visibleLineRange: IntRange? = null
+): AnnotatedString {
     val builder = AnnotatedString.Builder(code)
     builder.addStyle(SpanStyle(color = theme.textColor), 0, code.length)
-    
+    if (code.isEmpty()) return builder.toAnnotatedString()
+
     try {
-        val commentRegex = if (language == "py") {
-            "(#.*)".toRegex()
-        } else {
-            "(//.*|/\\*[\\s\\S]*?\\*/)".toRegex()
-        }
-        commentRegex.findAll(code).forEach { match ->
-            builder.addStyle(SpanStyle(color = theme.commentColor), match.range.first, match.range.last + 1)
+        var startCharIndex = 0
+        var endCharIndex = code.length
+
+        if (visibleLineRange != null) {
+            var currentLine = 0
+            var charPos = 0
+            val targetStartLine = visibleLineRange.first
+            val targetEndLine = visibleLineRange.last
+            var startSet = false
+
+            while (charPos < code.length) {
+                if (currentLine >= targetStartLine && !startSet) {
+                    startCharIndex = charPos
+                    startSet = true
+                }
+                if (currentLine == targetEndLine + 1) {
+                    endCharIndex = charPos
+                    break
+                }
+                if (code[charPos] == '\n') {
+                    currentLine++
+                }
+                charPos++
+            }
         }
 
-        "(\"[^\"]*\")".toRegex().findAll(code).forEach { match ->
-            builder.addStyle(SpanStyle(color = theme.stringColor), match.range.first, match.range.last + 1)
-        }
-        
-        "('[^']*')".toRegex().findAll(code).forEach { match ->
-            builder.addStyle(SpanStyle(color = theme.stringColor), match.range.first, match.range.last + 1)
+        // Safety clamp indices
+        startCharIndex = startCharIndex.coerceIn(0, code.length)
+        endCharIndex = endCharIndex.coerceIn(startCharIndex, code.length)
+
+        if (startCharIndex == endCharIndex) {
+            return builder.toAnnotatedString()
         }
 
-        "\\b(\\d+)\\b".toRegex().findAll(code).forEach { match ->
-            builder.addStyle(SpanStyle(color = theme.numberColor), match.range.first, match.range.last + 1)
+        // Get the substring to run regex matching on
+        val subCode = code.substring(startCharIndex, endCharIndex)
+
+        // Helper to add SpanStyle relative to original text
+        fun addStyleToRange(style: androidx.compose.ui.text.SpanStyle, start: Int, end: Int) {
+            val absStart = (start + startCharIndex).coerceIn(0, code.length)
+            val absEnd = (end + startCharIndex).coerceIn(absStart, code.length)
+            if (absStart < absEnd) {
+                builder.addStyle(style, absStart, absEnd)
+            }
         }
 
-        val keywords = when (language) {
-            "js", "json" -> listOf("const", "let", "var", "function", "return", "if", "else", "for", "while", "class", "import", "export", "from", "default", "true", "false", "this")
-            "py" -> listOf("def", "return", "if", "else", "elif", "for", "while", "import", "from", "in", "and", "or", "not", "True", "False", "None", "print")
-            "kt" -> listOf("package", "import", "fun", "val", "var", "if", "else", "for", "while", "return", "class", "object", "interface", "null", "true", "false", "when", "println")
-            "html" -> listOf("doctype", "html", "head", "body", "title", "style", "meta", "script", "div", "h1", "p", "button", "onclick")
-            else -> emptyList()
+        // Match Comments
+        val commentRegex = if (language == "py") COMMENT_REGEX_PYTHON else COMMENT_REGEX_DEFAULT
+        commentRegex.findAll(subCode).forEach { match ->
+            addStyleToRange(SpanStyle(color = theme.commentColor), match.range.first, match.range.last + 1)
         }
 
-        if (keywords.isNotEmpty()) {
-            val keywordPattern = "\\b(${keywords.joinToString("|")})\\b".toRegex(RegexOption.IGNORE_CASE)
-            keywordPattern.findAll(code).forEach { match ->
-                builder.addStyle(SpanStyle(color = theme.keywordColor, fontWeight = FontWeight.Bold), match.range.first, match.range.last + 1)
+        // Match Strings (Double quotes)
+        STRING_DOUBLE_REGEX.findAll(subCode).forEach { match ->
+            addStyleToRange(SpanStyle(color = theme.stringColor), match.range.first, match.range.last + 1)
+        }
+
+        // Match Strings (Single quotes)
+        STRING_SINGLE_REGEX.findAll(subCode).forEach { match ->
+            addStyleToRange(SpanStyle(color = theme.stringColor), match.range.first, match.range.last + 1)
+        }
+
+        // Match Numbers
+        NUMBER_REGEX.findAll(subCode).forEach { match ->
+            addStyleToRange(SpanStyle(color = theme.numberColor), match.range.first, match.range.last + 1)
+        }
+
+        // Match Keywords
+        val keywordRegex = when (language) {
+            "js", "json" -> KEYWORD_REGEX_JS
+            "py" -> KEYWORD_REGEX_PY
+            "kt" -> KEYWORD_REGEX_KT
+            "html" -> KEYWORD_REGEX_HTML
+            else -> null
+        }
+
+        if (keywordRegex != null) {
+            keywordRegex.findAll(subCode).forEach { match ->
+                addStyleToRange(
+                    SpanStyle(color = theme.keywordColor, fontWeight = FontWeight.Bold),
+                    match.range.first,
+                    match.range.last + 1
+                )
             }
         }
     } catch (_: Exception) {}
@@ -2048,5 +2150,10 @@ fun VSCodeEnvironmentSetupScreen(viewModel: CodeViewModel) {
             }
         }
     }
+}
+
+@Composable
+fun Greeting(name: String) {
+    Text(text = "Hello $name!")
 }
 

@@ -18,7 +18,7 @@ object GeminiService {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    private const val MODEL_NAME = "gemini-3.5-flash"
+    private const val MODEL_NAME = "gemini-2.0-flash"
     private const val API_URL = "https://generativelanguage.googleapis.com/v1beta/models/$MODEL_NAME:generateContent"
 
     suspend fun getAIResponse(prompt: String, systemInstruction: String = ""): Result<String> = withContext(Dispatchers.IO) {

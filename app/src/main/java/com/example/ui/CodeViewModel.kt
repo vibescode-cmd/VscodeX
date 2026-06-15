@@ -7,10 +7,15 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.BuildConfig
 import com.example.data.*
+import com.example.syntaxHighlight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.*
 
@@ -39,60 +44,140 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     // UI View states
-    val openTabs = MutableStateFlow<List<String>>(listOf("README.md"))
-    val activeTabPath = MutableStateFlow<String?>("README.md")
-    val activeFileContent = MutableStateFlow("")
-    val isFileModified = MutableStateFlow(false)
+    private val _openTabs = MutableStateFlow<List<String>>(listOf("README.md"))
+    val openTabs: StateFlow<List<String>> = _openTabs.asStateFlow()
+
+    private val _activeTabPath = MutableStateFlow<String?>("README.md")
+    val activeTabPath: StateFlow<String?> = _activeTabPath.asStateFlow()
+
+    private val _activeFileContent = MutableStateFlow("")
+    val activeFileContent: StateFlow<String> = _activeFileContent.asStateFlow()
+
+    private val _highlightedContent = MutableStateFlow<AnnotatedString?>(null)
+    val highlightedContent: StateFlow<AnnotatedString?> = _highlightedContent.asStateFlow()
+
+    private var highlightJob: kotlinx.coroutines.Job? = null
+
+    private val _isFileModified = MutableStateFlow(false)
+    val isFileModified: StateFlow<Boolean> = _isFileModified.asStateFlow()
 
     // Sidebar & View Layouts
     enum class SidebarCategory { EXPLORER, SEARCH, GIT, SNIPPETS, EXTENSIONS, SETTINGS }
-    val activeSidebar = MutableStateFlow(SidebarCategory.EXPLORER)
-    val isSidebarOpen = MutableStateFlow(true)
-    val isTerminalOpen = MutableStateFlow(true)
+    private val _activeSidebar = MutableStateFlow(SidebarCategory.EXPLORER)
+    val activeSidebar: StateFlow<SidebarCategory> = _activeSidebar.asStateFlow()
+
+    private val _isSidebarOpen = MutableStateFlow(true)
+    val isSidebarOpen: StateFlow<Boolean> = _isSidebarOpen.asStateFlow()
+
+    private val _isTerminalOpen = MutableStateFlow(true)
+    val isTerminalOpen: StateFlow<Boolean> = _isTerminalOpen.asStateFlow()
 
     // Custom Theme
-    val activeTheme = MutableStateFlow(EditorTheme.ProfessionalPolish)
+    private val _activeTheme = MutableStateFlow(EditorTheme.ProfessionalPolish)
+    val activeTheme: StateFlow<EditorTheme> = _activeTheme.asStateFlow()
 
     // Search and replace state
-    val searchQuery = MutableStateFlow("")
-    val searchResults = MutableStateFlow<List<CodeFile>>(emptyList())
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
+    private val _searchResults = MutableStateFlow<List<CodeFile>>(emptyList())
+    val searchResults: StateFlow<List<CodeFile>> = _searchResults.asStateFlow()
 
     // Terminal Emulator
     enum class LineType { INPUT_PROMPT, SYSTEM, OUTPUT, ERROR, SUCCESS, INFO }
     data class TerminalLine(val text: String, val type: LineType = LineType.OUTPUT)
 
-    val terminalLines = MutableStateFlow<List<TerminalLine>>(
+    private val _terminalLines = MutableStateFlow<List<TerminalLine>>(
         listOf(
             TerminalLine("Droid VS Code [Version 1.0.0]", LineType.SYSTEM),
             TerminalLine("Simulasi terminal Termux aktif. Ketik 'help' untuk daftar perintah.", LineType.INFO),
             TerminalLine("Siap menerima input pemrograman Anda.", LineType.SUCCESS)
         )
     )
-    val terminalInput = MutableStateFlow("")
+    val terminalLines: StateFlow<List<TerminalLine>> = _terminalLines.asStateFlow()
+
+    private val _terminalInput = MutableStateFlow("")
+    val terminalInput: StateFlow<String> = _terminalInput.asStateFlow()
+
     val terminalHistory = mutableListOf<String>()
     var historyIndex = -1
 
     // Git Settings state
-    val repoNameInput = MutableStateFlow("my-app-repo")
-    val repoUrlInput = MutableStateFlow("https://github.com/user/my-app-repo.git")
-    val repoBranchInput = MutableStateFlow("main")
-    val gitUsernameInput = MutableStateFlow("")
-    val gitTokenInput = MutableStateFlow("")
+    private val _repoNameInput = MutableStateFlow("my-app-repo")
+    val repoNameInput: StateFlow<String> = _repoNameInput.asStateFlow()
+
+    private val _repoUrlInput = MutableStateFlow("https://github.com/user/my-app-repo.git")
+    val repoUrlInput: StateFlow<String> = _repoUrlInput.asStateFlow()
+
+    private val _repoBranchInput = MutableStateFlow("main")
+    val repoBranchInput: StateFlow<String> = _repoBranchInput.asStateFlow()
+
+    private val _gitUsernameInput = MutableStateFlow("")
+    val gitUsernameInput: StateFlow<String> = _gitUsernameInput.asStateFlow()
+
+    private val _gitTokenInput = MutableStateFlow("")
+    val gitTokenInput: StateFlow<String> = _gitTokenInput.asStateFlow()
 
     // Snippets Selection
-    val activeSnippets = MutableStateFlow<List<Snippet>>(emptyList())
+    private val _activeSnippets = MutableStateFlow<List<Snippet>>(emptyList())
+    val activeSnippets: StateFlow<List<Snippet>> = _activeSnippets.asStateFlow()
 
     // UI notification / status alerts
-    val statusMessage = MutableStateFlow<String?>(null)
+    private val _statusMessage = MutableStateFlow<String?>(null)
+    val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
 
     // --- Environment Setup States ---
     private val prefs = application.getSharedPreferences("droid_vscode_prefs", android.content.Context.MODE_PRIVATE)
-    val isSetupComplete = MutableStateFlow(prefs.getBoolean("is_setup_complete", false))
-    val setupStage = MutableStateFlow(prefs.getInt("setup_stage", 0)) // 0 = start, 1 = proot, 2 = ubuntu download, 3 = extract, 4 = apt pkgs, 5 = done
-    val setupProgressPercent = MutableStateFlow(prefs.getFloat("setup_progress", 0.0f))
-    val setupLogsList = MutableStateFlow<List<String>>(emptyList())
-    val setupPausedDueToInternet = MutableStateFlow(false)
-    val isSettingUp = MutableStateFlow(false)
+    private val _isSetupComplete = MutableStateFlow(prefs.getBoolean("is_setup_complete", false))
+    val isSetupComplete: StateFlow<Boolean> = _isSetupComplete.asStateFlow()
+
+    private val _setupStage = MutableStateFlow(prefs.getInt("setup_stage", 0)) // 0 = start, 1 = proot, 2 = ubuntu download, 3 = extract, 4 = apt pkgs, 5 = done
+    val setupStage: StateFlow<Int> = _setupStage.asStateFlow()
+
+    private val _setupProgressPercent = MutableStateFlow(prefs.getFloat("setup_progress", 0.0f))
+    val setupProgressPercent: StateFlow<Float> = _setupProgressPercent.asStateFlow()
+
+    private val _setupLogsList = MutableStateFlow<List<String>>(emptyList())
+    val setupLogsList: StateFlow<List<String>> = _setupLogsList.asStateFlow()
+
+    private val _setupPausedDueToInternet = MutableStateFlow(false)
+    val setupPausedDueToInternet: StateFlow<Boolean> = _setupPausedDueToInternet.asStateFlow()
+
+    private val _isSettingUp = MutableStateFlow(false)
+    val isSettingUp: StateFlow<Boolean> = _isSettingUp.asStateFlow()
+
+    // Public setter methods for UI mutation
+    fun toggleSidebar() {
+        _isSidebarOpen.value = !_isSidebarOpen.value
+    }
+
+    fun setSidebarOpen(open: Boolean) {
+        _isSidebarOpen.value = open
+    }
+
+    fun updateRepoName(name: String) {
+        _repoNameInput.value = name
+    }
+
+    fun updateRepoUrl(url: String) {
+        _repoUrlInput.value = url
+    }
+
+    fun updateRepoBranch(branch: String) {
+        _repoBranchInput.value = branch
+    }
+
+    fun updateGitUsername(username: String) {
+        _gitUsernameInput.value = username
+    }
+
+    fun updateGitToken(token: String) {
+        _gitTokenInput.value = token
+    }
+
+    fun updateTerminalInput(input: String) {
+        _terminalInput.value = input
+    }
 
     private var setupJob: kotlinx.coroutines.Job? = null
 
@@ -108,9 +193,9 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
             putString("setup_logs", logs.joinToString("\n"))
             apply()
         }
-        setupStage.value = stage
-        setupProgressPercent.value = progress
-        setupLogsList.value = logs
+        _setupStage.value = stage
+        _setupProgressPercent.value = progress
+        _setupLogsList.value = logs
     }
 
     fun isInternetAvailable(): Boolean {
@@ -125,18 +210,18 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun addSetupLog(message: String) {
-        val currentLogs = setupLogsList.value.toMutableList()
+        val currentLogs = _setupLogsList.value.toMutableList()
         currentLogs.add(message)
-        setupLogsList.value = currentLogs
+        _setupLogsList.value = currentLogs
         prefs.edit().putString("setup_logs", currentLogs.joinToString("\n")).apply()
     }
 
     fun startEnvironmentSetup() {
-        if (isSetupComplete.value) return
-        if (isSettingUp.value) return
+        if (_isSetupComplete.value) return
+        if (_isSettingUp.value) return
         
-        setupPausedDueToInternet.value = false
-        isSettingUp.value = true
+        _setupPausedDueToInternet.value = false
+        _isSettingUp.value = true
         
         val restoredLogs = getPersistedLogs().toMutableList()
         if (restoredLogs.isEmpty()) {
@@ -145,24 +230,24 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
             restoredLogs.add("[OPTIMISASI] Konfigurasi memori rendah aktif: Heap Limit disesuaikan.")
             restoredLogs.add("[OPTIMISASI] Pembersihan otomatis penyimpanan diaktifkan untuk menghemat ruang disk.")
         }
-        setupLogsList.value = restoredLogs
+        _setupLogsList.value = restoredLogs
 
         setupJob = viewModelScope.launch {
             try {
-                while (setupStage.value < 5) {
-                    if (!isInternetAvailable() && (setupStage.value == 1 || setupStage.value == 2 || setupStage.value == 4)) {
+                while (_setupStage.value < 5) {
+                    if (!isInternetAvailable() && (_setupStage.value == 1 || _setupStage.value == 2 || _setupStage.value == 4)) {
                         pauseSetupForInternet()
                         return@launch
                     }
 
-                    when (setupStage.value) {
+                    when (_setupStage.value) {
                         0 -> {
                             addSetupLog("\n[TAHAP 1/5] Mempersiapkan lingkungan direktori lokal...")
-                            persistSetupState(0, 0.05f, setupLogsList.value)
+                            persistSetupState(0, 0.05f, _setupLogsList.value)
                             kotlinx.coroutines.delay(1200)
                             addSetupLog("[SUKSES] Direktori /data/data/com.example/files/usr/ aman.")
                             addSetupLog("[SUKSES] Menyiapkan environment variable: PATH, LD_PRELOAD, HOME.")
-                            persistSetupState(1, 0.20f, setupLogsList.value)
+                            persistSetupState(1, 0.20f, _setupLogsList.value)
                         }
                         1 -> {
                             addSetupLog("\n[TAHAP 2/5] Memasang sistem pembungkus proot-distro...")
@@ -174,16 +259,16 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                             addSetupLog("Mengekstrak package proot-distro...")
                             addSetupLog("Memasang berkas konfigurasi di /usr/etc/proot-distro...")
                             addSetupLog("[SUKSES] proot-distro berhasil dikonfigurasi.")
-                            persistSetupState(2, 0.40f, setupLogsList.value)
+                            persistSetupState(2, 0.40f, _setupLogsList.value)
                         }
                         2 -> {
                             addSetupLog("\n[TAHAP 3/5] Mengunduh berkas kompresi Ubuntu OS (arm64 core)...")
-                            persistSetupState(2, 0.40f, setupLogsList.value)
+                            persistSetupState(2, 0.40f, _setupLogsList.value)
                             
-                            var progress = maxOf(0.40f, setupProgressPercent.value)
+                            var progress = maxOf(0.40f, _setupProgressPercent.value)
                             while (progress < 0.65f) {
                                 if (!isInternetAvailable()) {
-                                    persistSetupState(2, progress, setupLogsList.value)
+                                    persistSetupState(2, progress, _setupLogsList.value)
                                     pauseSetupForInternet()
                                     return@launch
                                 }
@@ -191,25 +276,25 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                                 progress += 0.05f
                                 val mbDownloaded = ((progress - 0.40f) * 400).toInt()
                                 addSetupLog("Mengunduh ubuntu-base-22.04... $mbDownloaded MB / 100 MB [${((progress - 0.40f) / 0.25f * 100).toInt()}%]")
-                                persistSetupState(2, progress, setupLogsList.value)
+                                persistSetupState(2, progress, _setupLogsList.value)
                             }
                             addSetupLog("[SUKSES] Berkas dasar ubuntu-base berhasil diunduh dan diverifikasi (SHA-256 cocok).")
-                            persistSetupState(3, 0.65f, setupLogsList.value)
+                            persistSetupState(3, 0.65f, _setupLogsList.value)
                         }
                         3 -> {
                             addSetupLog("\n[TAHAP 4/5] Mengekstrak Root File System (RootFS) Ubuntu...")
                             addSetupLog("[OPTIMISASI] Membuka thread kompresi berkecepatan tinggi...")
-                            persistSetupState(3, 0.65f, setupLogsList.value)
+                            persistSetupState(3, 0.65f, _setupLogsList.value)
                             kotlinx.coroutines.delay(1500)
                             addSetupLog("Mengekstrak tarball RootFS ke /data/data/com.example/files/usr/var/lib/proot-distro/installed-distros/ubuntu...")
                             kotlinx.coroutines.delay(1200)
                             addSetupLog("[SUKSES] Ekstraksi filesystem selesai!")
                             addSetupLog("[OPTIMISASI] Mengurangi penggunaan memori internal: membersihkan archive tarball dasar (menghemat 100MB!).")
-                            persistSetupState(4, 0.80f, setupLogsList.value)
+                            persistSetupState(4, 0.80f, _setupLogsList.value)
                         }
                         4 -> {
                             addSetupLog("\n[TAHAP 5/5] Melakukan instalasi pustaka pengembang & runtime wajib...")
-                            persistSetupState(4, 0.80f, setupLogsList.value)
+                            persistSetupState(4, 0.80f, _setupLogsList.value)
                             
                             var subProgress = 0
                             val pkgs = listOf("apt update && apt upgrade -y", "apt install nodejs python3 gcc clang git -y", "apt clean")
@@ -234,41 +319,41 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                                     addSetupLog("[OPTIMISASI] RAM physical footprint diatur ulang (Low Garbage Collection frequency).")
                                 }
                                 subProgress++
-                                persistSetupState(4, 0.80f + (subProgress * 0.06f), setupLogsList.value)
+                                persistSetupState(4, 0.80f + (subProgress * 0.06f), _setupLogsList.value)
                             }
                             
                             addSetupLog("\n[SUKSES] Konfigurasi environment pengembang selesai total!")
                             addSetupLog("[SISTEM] Droid VS Code siap digunakan!")
-                            persistSetupState(5, 1.0f, setupLogsList.value)
+                            persistSetupState(5, 1.0f, _setupLogsList.value)
                         }
                     }
                 }
                 
                 prefs.edit().putBoolean("is_setup_complete", true).apply()
-                isSetupComplete.value = true
-                isSettingUp.value = false
+                _isSetupComplete.value = true
+                _isSettingUp.value = false
             } catch (e: Exception) {
                 addSetupLog("[EROR SETUP]: ${e.localizedMessage}")
-                isSettingUp.value = false
+                _isSettingUp.value = false
             }
         }
     }
 
     private fun pauseSetupForInternet() {
-        setupPausedDueToInternet.value = true
-        isSettingUp.value = false
+        _setupPausedDueToInternet.value = true
+        _isSettingUp.value = false
         addSetupLog("\n⚠️ [KONEKSI TERPUTUS] Jaringan internet tidak terdeteksi atau terputus!")
         addSetupLog("[INFO] Menyimpan konfigurasi setup secara aman di penyimpanan internal...")
         addSetupLog("[SISTEM] Silakan sambungkan kembali internet Anda untuk melanjutkan instalasi dari titik terakhir.")
     }
 
     fun forceSimulateDisconnect() {
-        if (isSettingUp.value) {
+        if (_isSettingUp.value) {
             setupJob?.cancel()
-            setupPausedDueToInternet.value = true
-            isSettingUp.value = false
+            _setupPausedDueToInternet.value = true
+            _isSettingUp.value = false
             addSetupLog("\n⚠️ [KONEKSI TERPUTUS (SIMULASI)] Koneksi internet diputus secara manual oleh pengguna!")
-            addSetupLog("[INFO] Menyimpan setup dan progress (${(setupProgressPercent.value * 100).toInt()}%)...")
+            addSetupLog("[INFO] Menyimpan setup dan progress (${(_setupProgressPercent.value * 100).toInt()}%)...")
             addSetupLog("[SISTEM] Klik 'Hubungkan Kembali & Lanjutkan' untuk melanjutkan proses instalasi.")
         }
     }
@@ -282,12 +367,12 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
             putString("setup_logs", "")
             apply()
         }
-        isSetupComplete.value = false
-        setupStage.value = 0
-        setupProgressPercent.value = 0.0f
-        setupLogsList.value = emptyList()
-        setupPausedDueToInternet.value = false
-        isSettingUp.value = false
+        _isSetupComplete.value = false
+        _setupStage.value = 0
+        _setupProgressPercent.value = 0.0f
+        _setupLogsList.value = emptyList()
+        _setupPausedDueToInternet.value = false
+        _isSettingUp.value = false
     }
 
     init {
@@ -304,47 +389,62 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
     // --- UI Actions & Database Interactions ---
 
     fun showMessage(message: String) {
-        statusMessage.value = message
+        _statusMessage.value = message
     }
 
     fun clearMessage() {
-        statusMessage.value = null
+        _statusMessage.value = null
     }
 
     fun chooseSidebar(sidebar: SidebarCategory) {
-        if (activeSidebar.value == sidebar && isSidebarOpen.value) {
-            isSidebarOpen.value = false
+        if (_activeSidebar.value == sidebar && _isSidebarOpen.value) {
+            _isSidebarOpen.value = false
         } else {
-            activeSidebar.value = sidebar
-            isSidebarOpen.value = true
+            _activeSidebar.value = sidebar
+            _isSidebarOpen.value = true
         }
 
         // Auto load snippets if we click snippets tab
         if (sidebar == SidebarCategory.SNIPPETS) {
-            val extension = activeTabPath.value?.substringAfterLast(".", "all") ?: "all"
+            val extension = _activeTabPath.value?.substringAfterLast(".", "all") ?: "all"
             loadSnippets(extension)
         }
     }
 
     fun toggleTerminal() {
-        isTerminalOpen.value = !isTerminalOpen.value
+        _isTerminalOpen.value = !_isTerminalOpen.value
     }
 
     fun changeTheme(theme: EditorTheme) {
-        activeTheme.value = theme
+        _activeTheme.value = theme
     }
 
     fun searchFiles(query: String) {
-        searchQuery.value = query
+        _searchQuery.value = query
         if (query.isEmpty()) {
-            searchResults.value = emptyList()
+            _searchResults.value = emptyList()
             return
         }
         viewModelScope.launch {
             val matches = allFiles.value.filter {
                 !it.isFolder && (it.name.contains(query, ignoreCase = true) || it.content.contains(query, ignoreCase = true))
             }
-            searchResults.value = matches
+            _searchResults.value = matches
+        }
+    }
+
+    private fun triggerHighlight(content: String, delayMs: Long = 300L, path: String? = null) {
+        highlightJob?.cancel()
+        val activePath = path ?: _activeTabPath.value ?: return
+        val ext = activePath.substringAfterLast(".", "all")
+        val theme = _activeTheme.value
+        
+        highlightJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            if (delayMs > 0) {
+                kotlinx.coroutines.delay(delayMs)
+            }
+            val annotated = syntaxHighlight(content, ext, theme)
+            _highlightedContent.value = annotated
         }
     }
 
@@ -353,53 +453,57 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
             val file = repository.getFileByPath(path)
             if (file != null && !file.isFolder) {
                 // Check if already in tabs
-                val currentTabs = openTabs.value.toMutableList()
+                val currentTabs = _openTabs.value.toMutableList()
                 if (!currentTabs.contains(path)) {
                     currentTabs.add(path)
-                    openTabs.value = currentTabs
+                    _openTabs.value = currentTabs
                 }
-                activeTabPath.value = path
-                activeFileContent.value = file.content
-                isFileModified.value = false
+                _activeTabPath.value = path
+                _activeFileContent.value = file.content
+                _isFileModified.value = false
 
                 val ext = path.substringAfterLast(".", "all")
                 loadSnippets(ext)
+                
+                triggerHighlight(file.content, delayMs = 0L, path = path)
             }
         }
     }
 
     fun closeTab(path: String) {
-        val currentTabs = openTabs.value.toMutableList()
+        val currentTabs = _openTabs.value.toMutableList()
         currentTabs.remove(path)
-        openTabs.value = currentTabs
+        _openTabs.value = currentTabs
 
-        if (activeTabPath.value == path) {
+        if (_activeTabPath.value == path) {
             if (currentTabs.isNotEmpty()) {
                 openFile(currentTabs.last())
             } else {
-                activeTabPath.value = null
-                activeFileContent.value = ""
-                isFileModified.value = false
+                _activeTabPath.value = null
+                _activeFileContent.value = ""
+                _isFileModified.value = false
+                _highlightedContent.value = null
             }
         }
     }
 
     fun modifyActiveContent(newContent: String) {
-        activeFileContent.value = newContent
-        isFileModified.value = true
+        _activeFileContent.value = newContent
+        _isFileModified.value = true
+        triggerHighlight(newContent, delayMs = 300L)
     }
 
     fun saveActiveFile() {
-        val path = activeTabPath.value ?: return
+        val path = _activeTabPath.value ?: return
         viewModelScope.launch {
             val file = repository.getFileByPath(path)
             if (file != null) {
                 val updatedFile = file.copy(
-                    content = activeFileContent.value,
+                    content = _activeFileContent.value,
                     lastModified = System.currentTimeMillis()
                 )
                 repository.insertFile(updatedFile)
-                isFileModified.value = false
+                _isFileModified.value = false
                 showMessage("Berkas '$path' berhasil disimpan.")
             }
         }
@@ -459,10 +563,13 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- Snippets & Formatting logic ---
 
+    private var snippetJob: kotlinx.coroutines.Job? = null
+
     fun loadSnippets(extension: String) {
-        viewModelScope.launch {
+        snippetJob?.cancel()
+        snippetJob = viewModelScope.launch {
             repository.getSnippetsForLanguageFlow(extension).collect {
-                activeSnippets.value = it
+                _activeSnippets.value = it
             }
         }
     }
@@ -483,15 +590,17 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun insertSnippetIntoEditor(body: String) {
-        val currentContent = activeFileContent.value
-        activeFileContent.value = currentContent + "\n" + body
-        isFileModified.value = true
+        val currentContent = _activeFileContent.value
+        val newContent = currentContent + "\n" + body
+        _activeFileContent.value = newContent
+        _isFileModified.value = true
+        triggerHighlight(newContent, delayMs = 0L)
     }
 
     fun autoFormatCode() {
-        val content = activeFileContent.value
+        val content = _activeFileContent.value
         if (content.isEmpty()) return
-        val extension = activeTabPath.value?.substringAfterLast(".", "") ?: ""
+        val extension = _activeTabPath.value?.substringAfterLast(".", "") ?: ""
 
         val isExtensionEnabled = extensions.value.find { it.id == "prettier" }?.isEnabled ?: true
         if (!isExtensionEnabled) {
@@ -500,8 +609,9 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val formatted = formatContent(content, extension)
-        activeFileContent.value = formatted
-        isFileModified.value = true
+        _activeFileContent.value = formatted
+        _isFileModified.value = true
+        triggerHighlight(formatted, delayMs = 0L)
         showMessage("Format kode otomatis berhasil diterapkan.")
     }
 
@@ -549,7 +659,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
     // --- Artificial Intelligence Gemini Copilot ---
 
     fun askAICopilot(promptType: String) {
-        val activePath = activeTabPath.value
+        val activePath = _activeTabPath.value
         if (activePath == null) {
             showMessage("Buka berkas terlebih dahulu untuk menggunakan asisten AI.")
             return
@@ -563,7 +673,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             showMessage("Menghubungi Copilot AI...")
-            val currentCode = activeFileContent.value
+            val currentCode = _activeFileContent.value
 
             val systemInstruction = "Anda adalah kecerdasan buatan Gemini AI Copilot terintegrasi di Droid VS Code. Pengguna sedang mengedit berkas '$activePath'. Bantu pengembang dengan output kode mentah terformat yang dipesan. Jawablah secara efisien."
             val prompt = when (promptType) {
@@ -577,15 +687,17 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
             result.onSuccess { aiResult ->
                 if (promptType == "AUTOCOMPLETE") {
                     val formattedResult = aiResult.replace("```" + activePath.substringAfterLast(".", ""), "").replace("```", "").trim()
-                    activeFileContent.value = currentCode + "\n" + formattedResult
-                    isFileModified.value = true
+                    val newContent = currentCode + "\n" + formattedResult
+                    _activeFileContent.value = newContent
+                    _isFileModified.value = true
+                    triggerHighlight(newContent, delayMs = 0L)
                     showMessage("Pelengkapan AI berhasil disematkan!")
                 } else {
                     // Show inside simulated terminal
                     addTerminalOutput("\n🤖 [Gemini Copilot Hub]:", LineType.SUCCESS)
                     addTerminalOutput(aiResult, LineType.OUTPUT)
                     addTerminalOutput("-----------------------------", LineType.SYSTEM)
-                    isTerminalOpen.value = true
+                    _isTerminalOpen.value = true
                     showMessage("Penjelasan AI dikirim ke Terminal!")
                 }
             }.onFailure { err ->
@@ -623,7 +735,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
             addTerminalOutput("\n$ [Git Shell Controller - Realtime Remote Console]:", LineType.SYSTEM)
             when (action) {
                 "CLONE" -> {
-                    addTerminalOutput("git clone ${repoUrlInput.value} --branch ${repoBranchInput.value} ...", LineType.INPUT_PROMPT)
+                    addTerminalOutput("git clone ${_repoUrlInput.value} --branch ${_repoBranchInput.value} ...", LineType.INPUT_PROMPT)
                     addTerminalOutput("Menghubungkan ke server hosting Git dan autentikasi token...", LineType.INFO)
                     addTerminalOutput("Mengunduh metadata repositori...", LineType.OUTPUT)
                     addTerminalOutput("Unpacking objects: 100% (45/45), done.", LineType.OUTPUT)
@@ -633,7 +745,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                     repository.insertFile(CodeFile(
                         path = gitFileName,
                         name = "api-connector.js",
-                        content = "// Git Cloned File\nconsole.log(\"Mengambil data API dari repositori ${repoUrlInput.value}\");\n\nconst API_URL = \"https://api.github.com\";",
+                        content = "// Git Cloned File\nconsole.log(\"Mengambil data API dari repositori ${_repoUrlInput.value}\");\n\nconst API_URL = \"https://api.github.com\";",
                         language = "javascript",
                         isFolder = false
                     ))
@@ -651,20 +763,20 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                     addTerminalOutput("1 file diubah, +4 baris baru.", LineType.OUTPUT)
                 }
                 "PUSH" -> {
-                    addTerminalOutput("git push origin ${repoBranchInput.value}", LineType.INPUT_PROMPT)
+                    addTerminalOutput("git push origin ${_repoBranchInput.value}", LineType.INPUT_PROMPT)
                     addTerminalOutput("Mengkalkulasikan ukuran file kompresi...", LineType.INFO)
-                    addTerminalOutput("Auth user: ${gitUsernameInput.value.ifEmpty { "developer" }} ... OK", LineType.INFO)
-                    addTerminalOutput("Mengunggah objek data ke ${repoUrlInput.value}", LineType.INFO)
-                    addTerminalOutput("Pushed main -> ${repoBranchInput.value} (SHA-1: d6ff89ea)", LineType.SUCCESS)
+                    addTerminalOutput("Auth user: ${_gitUsernameInput.value.ifEmpty { "developer" }} ... OK", LineType.INFO)
+                    addTerminalOutput("Mengunggah objek data ke ${_repoUrlInput.value}", LineType.INFO)
+                    addTerminalOutput("Pushed main -> ${_repoBranchInput.value} (SHA-1: d6ff89ea)", LineType.SUCCESS)
                     addTerminalOutput("Selamat! Kode Anda tersinkronisasi di Cloud Github/Gitlab.", LineType.SUCCESS)
                 }
                 "PULL" -> {
-                    addTerminalOutput("git pull origin ${repoBranchInput.value}", LineType.INPUT_PROMPT)
+                    addTerminalOutput("git pull origin ${_repoBranchInput.value}", LineType.INPUT_PROMPT)
                     addTerminalOutput("Fetching data remote origin...", LineType.INFO)
                     addTerminalOutput("Already up to date.", LineType.SUCCESS)
                 }
             }
-            isTerminalOpen.value = true
+            _isTerminalOpen.value = true
         }
     }
 
@@ -674,7 +786,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
         val trimmedInput = input.trim()
         if (trimmedInput.isEmpty()) return
 
-        terminalLines.value = terminalLines.value + TerminalLine("droid-vscode@android:~$ $trimmedInput", LineType.INPUT_PROMPT)
+        _terminalLines.value = _terminalLines.value + TerminalLine("droid-vscode@android:~$ $trimmedInput", LineType.INPUT_PROMPT)
         terminalHistory.add(trimmedInput)
         historyIndex = terminalHistory.size
 
@@ -698,7 +810,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                 addTerminalOutput("  git clone <url>           Sinkronkan clone dari url.", LineType.OUTPUT)
             }
             "clear" -> {
-                terminalLines.value = emptyList()
+                _terminalLines.value = emptyList()
             }
             "ls" -> {
                 viewModelScope.launch {
@@ -778,7 +890,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                         repository.insertFile(file.copy(content = outputCode))
                         addTerminalOutput("formatting kode berkas '$path' berhasil selesai.", LineType.SUCCESS)
                         // Reload if active
-                        if (activeTabPath.value == path) {
+                        if (_activeTabPath.value == path) {
                             openFile(path)
                         }
                     }
@@ -792,7 +904,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                 val tmName = args[0].lowercase()
                 val matchedTheme = EditorTheme.ALL_THEMES.find { it.name.lowercase().contains(tmName) }
                 if (matchedTheme != null) {
-                    activeTheme.value = matchedTheme
+                    _activeTheme.value = matchedTheme
                     addTerminalOutput("Visual workspace diubah ke: ${matchedTheme.name}", LineType.SUCCESS)
                 } else {
                     addTerminalOutput("Eror: Tema tidak dikenal. Gunakan: dracula, monokai, vscode, light, atau matrix", LineType.ERROR)
@@ -841,11 +953,11 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                 addTerminalOutput("Eror: Perintah '$cmd' tidak dikenal. Ketik 'help' untuk daftar lengkap shell commands.", LineType.ERROR)
             }
         }
-        terminalInput.value = ""
+        _terminalInput.value = ""
     }
 
     private fun addTerminalOutput(text: String, type: LineType) {
-        terminalLines.value = terminalLines.value + TerminalLine(text, type)
+        _terminalLines.value = _terminalLines.value + TerminalLine(text, type)
     }
 
     private fun executeCodeFileInTerminal(path: String) {
