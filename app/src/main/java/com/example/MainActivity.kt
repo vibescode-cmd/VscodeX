@@ -80,6 +80,18 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
     val highlightedContent by viewModel.highlightedContent.collectAsState()
     val isFileModified by viewModel.isFileModified.collectAsState()
 
+    val canUndo by viewModel.canUndo.collectAsState()
+    val canRedo by viewModel.canRedo.collectAsState()
+
+    val isFindPanelOpen by viewModel.isFindPanelOpen.collectAsState()
+    val findQuery by viewModel.findQuery.collectAsState()
+    val replaceQuery by viewModel.replaceQuery.collectAsState()
+    val searchMatches by viewModel.searchMatches.collectAsState()
+    val activeMatchIndex by viewModel.activeMatchIndex.collectAsState()
+    val matchCase by viewModel.matchCase.collectAsState()
+    val wholeWord by viewModel.wholeWord.collectAsState()
+    val autoSaveStatus by viewModel.autoSaveStatus.collectAsState()
+
     // Layout configuration
     val isSidebarOpen by viewModel.isSidebarOpen.collectAsState()
     val activeSidebar by viewModel.activeSidebar.collectAsState()
@@ -135,6 +147,8 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                 activeTabPath = activeTabPath,
                 isFileModified = isFileModified,
                 theme = activeTheme,
+                canUndo = canUndo,
+                canRedo = canRedo,
                 onSaveClick = { viewModel.saveActiveFile() },
                 onFormatClick = { viewModel.autoFormatCode() },
                 onRunClick = {
@@ -145,7 +159,10 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                 onAICopilotClick = { viewModel.askAICopilot("AUTOCOMPLETE") },
                 onAICopilotExplain = { viewModel.askAICopilot("EXPLAIN") },
                 onToggleSidebar = { viewModel.toggleSidebar() },
-                onToggleTerminal = { viewModel.toggleTerminal() }
+                onToggleTerminal = { viewModel.toggleTerminal() },
+                onUndoClick = { viewModel.undoEdit() },
+                onRedoClick = { viewModel.redoEdit() },
+                onSearchClick = { viewModel.openFindPanel() }
             )
 
             // 2. MAIN LAYOUT AREA (SIDEBAR + EDITOR + TERMINAL)
@@ -308,6 +325,28 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                                 highlightedContent = highlightedContent,
                                 onContentChange = { viewModel.modifyActiveContent(it) }
                             )
+
+                            if (isFindPanelOpen) {
+                                VSCodeFindReplacePanel(
+                                    findQuery = findQuery,
+                                    replaceQuery = replaceQuery,
+                                    searchMatches = searchMatches,
+                                    activeMatchIndex = activeMatchIndex,
+                                    matchCase = matchCase,
+                                    wholeWord = wholeWord,
+                                    theme = activeTheme,
+                                    onFindQueryChange = { viewModel.updateFindQuery(it) },
+                                    onReplaceQueryChange = { viewModel.updateReplaceQuery(it) },
+                                    onFindNext = { viewModel.findNext() },
+                                    onFindPrevious = { viewModel.findPrevious() },
+                                    onReplace = { viewModel.replaceCurrent() },
+                                    onReplaceAll = { viewModel.replaceAll() },
+                                    onToggleMatchCase = { viewModel.toggleMatchCase() },
+                                    onToggleWholeWord = { viewModel.toggleWholeWord() },
+                                    onClose = { viewModel.closeFindPanel() },
+                                    modifier = Modifier.align(Alignment.TopCenter)
+                                )
+                            }
                         } else {
                             // High Quality Space Blueprint Empty State
                             VSCodeEmptyWorkspaceState(theme = activeTheme)
@@ -325,7 +364,9 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
                             } ?: viewModel.showMessage("Buka berkas untuk eksekusi.")
                         },
                         onFormat = { viewModel.autoFormatCode() },
-                        onSendAI = { viewModel.askAICopilot("AUTOCOMPLETE") }
+                        onSendAI = { viewModel.askAICopilot("AUTOCOMPLETE") },
+                        onUndo = { viewModel.undoEdit() },
+                        onRedo = { viewModel.redoEdit() }
                     )
 
                     // Splitted Bottom Terminal Panel
@@ -354,7 +395,8 @@ fun VSCodeAppContainer(viewModel: CodeViewModel = viewModel()) {
             VSCodeStatusBar(
                 branch = gitBranch,
                 theme = activeTheme,
-                onSyncClick = { viewModel.executeTerminalCommand("git pull") }
+                onSyncClick = { viewModel.executeTerminalCommand("git pull") },
+                autoSaveStatus = autoSaveStatus
             )
         }
     }
@@ -571,13 +613,18 @@ fun VSCodeTopMenuBar(
     activeTabPath: String?,
     isFileModified: Boolean,
     theme: EditorTheme,
+    canUndo: Boolean,
+    canRedo: Boolean,
     onSaveClick: () -> Unit,
     onFormatClick: () -> Unit,
     onRunClick: () -> Unit,
     onAICopilotClick: () -> Unit,
     onAICopilotExplain: () -> Unit,
     onToggleSidebar: () -> Unit,
-    onToggleTerminal: () -> Unit
+    onToggleTerminal: () -> Unit,
+    onUndoClick: () -> Unit,
+    onRedoClick: () -> Unit,
+    onSearchClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -637,6 +684,27 @@ fun VSCodeTopMenuBar(
 
             // Action controls
             if (activeTabPath != null) {
+                IconButton(onClick = onUndoClick, enabled = canUndo) {
+                    Icon(
+                        imageVector = Icons.Default.Undo,
+                        contentDescription = "Undo",
+                        tint = if (canUndo) theme.accentColor else Color.Gray
+                    )
+                }
+                IconButton(onClick = onRedoClick, enabled = canRedo) {
+                    Icon(
+                        imageVector = Icons.Default.Redo,
+                        contentDescription = "Redo",
+                        tint = if (canRedo) theme.accentColor else Color.Gray
+                    )
+                }
+                IconButton(onClick = onSearchClick) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Cari Teks",
+                        tint = Color.LightGray
+                    )
+                }
                 IconButton(onClick = onSaveClick) {
                     Icon(
                         imageVector = Icons.Default.Save,
@@ -1368,7 +1436,9 @@ fun VSCodeShortcutHelperBar(
     onInsertText: (String) -> Unit,
     onRun: () -> Unit,
     onFormat: () -> Unit,
-    onSendAI: () -> Unit
+    onSendAI: () -> Unit,
+    onUndo: (() -> Unit)? = null,
+    onRedo: (() -> Unit)? = null
 ) {
     Row(
         modifier = Modifier
@@ -1418,6 +1488,16 @@ fun VSCodeShortcutHelperBar(
                 modifier = Modifier.padding(start = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                if (onUndo != null) {
+                    IconButton(onClick = onUndo, modifier = Modifier.size(34.dp)) {
+                        Icon(Icons.Default.Undo, "Undo", tint = Color.White, modifier = Modifier.size(16.dp))
+                    }
+                }
+                if (onRedo != null) {
+                    IconButton(onClick = onRedo, modifier = Modifier.size(34.dp)) {
+                        Icon(Icons.Default.Redo, "Redo", tint = Color.White, modifier = Modifier.size(16.dp))
+                    }
+                }
                 // Formatting Text Helper
                 IconButton(onClick = onFormat, modifier = Modifier.size(34.dp)) {
                     Icon(Icons.Default.FormatAlignLeft, "Format", tint = Color.White, modifier = Modifier.size(16.dp))
@@ -1662,7 +1742,9 @@ fun syntaxHighlight(
     code: String,
     language: String,
     theme: EditorTheme,
-    visibleLineRange: IntRange? = null
+    visibleLineRange: IntRange? = null,
+    searchMatches: List<com.example.ui.CodeViewModel.SearchMatch> = emptyList(),
+    activeMatchIndex: Int = 0
 ): AnnotatedString {
     val builder = AnnotatedString.Builder(code)
     builder.addStyle(SpanStyle(color = theme.textColor), 0, code.length)
@@ -1754,6 +1836,22 @@ fun syntaxHighlight(
                 )
             }
         }
+
+        // Match Search highlights overlay
+        if (searchMatches.isNotEmpty()) {
+            searchMatches.forEachIndexed { index, match ->
+                val style = if (index == activeMatchIndex) {
+                    SpanStyle(background = androidx.compose.ui.graphics.Color(0xFFFF8C00).copy(alpha = 0.6f))
+                } else {
+                    SpanStyle(background = androidx.compose.ui.graphics.Color.Yellow.copy(alpha = 0.4f))
+                }
+                val absStart = match.start.coerceIn(0, code.length)
+                val absEnd = match.end.coerceIn(absStart, code.length)
+                if (absStart < absEnd) {
+                    builder.addStyle(style, absStart, absEnd)
+                }
+            }
+        }
     } catch (_: Exception) {}
 
     return builder.toAnnotatedString()
@@ -1790,6 +1888,7 @@ fun VSCodeStatusBar(
     branch: String,
     theme: EditorTheme,
     onSyncClick: () -> Unit,
+    autoSaveStatus: String? = null,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -1870,6 +1969,23 @@ fun VSCodeStatusBar(
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
                 )
+            }
+
+            // Auto-Save Status Indicator
+            if (autoSaveStatus != null) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                ) {
+                    Text(
+                        text = autoSaveStatus,
+                        color = if (autoSaveStatus.startsWith("✓")) Color(0xFF22C55E) else Color.Yellow,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
@@ -2155,5 +2271,189 @@ fun VSCodeEnvironmentSetupScreen(viewModel: CodeViewModel) {
 @Composable
 fun Greeting(name: String) {
     Text(text = "Hello $name!")
+}
+
+@Composable
+fun VSCodeFindReplacePanel(
+    findQuery: String,
+    replaceQuery: String,
+    searchMatches: List<com.example.ui.CodeViewModel.SearchMatch>,
+    activeMatchIndex: Int,
+    matchCase: Boolean,
+    wholeWord: Boolean,
+    theme: EditorTheme,
+    onFindQueryChange: (String) -> Unit,
+    onReplaceQueryChange: (String) -> Unit,
+    onFindNext: () -> Unit,
+    onFindPrevious: () -> Unit,
+    onReplace: () -> Unit,
+    onReplaceAll: () -> Unit,
+    onToggleMatchCase: () -> Unit,
+    onToggleWholeWord: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val matchCount = searchMatches.size
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF1F1F1F).copy(alpha = 0.95f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, Color(0xFF3C3C3C))
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Row 1: Find Input + Counter + Controls
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = findQuery,
+                    onValueChange = onFindQueryChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    placeholder = { Text("Cari...", color = Color.Gray, fontSize = 13.sp) },
+                    textStyle = TextStyle(color = Color.White, fontSize = 13.sp),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = theme.accentColor,
+                        unfocusedBorderColor = Color(0xFF3C3C3C),
+                        focusedContainerColor = Color(0xFF2D2D2D),
+                        unfocusedContainerColor = Color(0xFF2D2D2D)
+                    ),
+                    shape = RoundedCornerShape(4.dp)
+                )
+
+                val matchNum = if (matchCount > 0) activeMatchIndex + 1 else 0
+                Text(
+                    text = "$matchNum dari $matchCount",
+                    color = Color.LightGray,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+
+                IconButton(onClick = onFindPrevious, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronLeft,
+                        contentDescription = "Sebelumnya",
+                        tint = if (matchCount > 0) Color.White else Color.Gray,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                IconButton(onClick = onFindNext, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = "Berikutnya",
+                        tint = if (matchCount > 0) Color.White else Color.Gray,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                IconButton(onClick = onClose, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Tutup",
+                        tint = Color.White,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            // Row 2: Replace Input + Action Buttons + Option Toggles
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = replaceQuery,
+                    onValueChange = onReplaceQueryChange,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    placeholder = { Text("Ganti dengan...", color = Color.Gray, fontSize = 13.sp) },
+                    textStyle = TextStyle(color = Color.White, fontSize = 13.sp),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = theme.accentColor,
+                        unfocusedBorderColor = Color(0xFF3C3C3C),
+                        focusedContainerColor = Color(0xFF2D2D2D),
+                        unfocusedContainerColor = Color(0xFF2D2D2D)
+                    ),
+                    shape = RoundedCornerShape(4.dp)
+                )
+
+                IconButton(
+                    onClick = onToggleMatchCase,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            if (matchCase) theme.accentColor.copy(alpha = 0.3f) else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
+                ) {
+                    Text(
+                        "Aa",
+                        color = if (matchCase) theme.accentColor else Color.LightGray,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                IconButton(
+                    onClick = onToggleWholeWord,
+                    modifier = Modifier
+                        .size(36.dp)
+                        .background(
+                            if (wholeWord) theme.accentColor.copy(alpha = 0.3f) else Color.Transparent,
+                            RoundedCornerShape(4.dp)
+                        )
+                ) {
+                    Text(
+                        "W",
+                        color = if (wholeWord) theme.accentColor else Color.LightGray,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                IconButton(
+                    onClick = onReplace,
+                    enabled = matchCount > 0,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Autorenew,
+                        contentDescription = "Ganti Current",
+                        tint = if (matchCount > 0) theme.accentColor else Color.Gray,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                IconButton(
+                    onClick = onReplaceAll,
+                    enabled = matchCount > 0,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.DoneAll,
+                        contentDescription = "Ganti Semua",
+                        tint = if (matchCount > 0) theme.accentColor else Color.Gray,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+            }
+        }
+    }
 }
 

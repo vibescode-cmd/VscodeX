@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import java.util.*
 
 class CodeViewModel(application: Application) : AndroidViewModel(application) {
@@ -82,6 +83,47 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _searchResults = MutableStateFlow<List<CodeFile>>(emptyList())
     val searchResults: StateFlow<List<CodeFile>> = _searchResults.asStateFlow()
+
+    // Find and Replace
+    data class SearchMatch(val start: Int, val end: Int)
+
+    private val _findQuery = MutableStateFlow("")
+    val findQuery: StateFlow<String> = _findQuery.asStateFlow()
+
+    private val _replaceQuery = MutableStateFlow("")
+    val replaceQuery: StateFlow<String> = _replaceQuery.asStateFlow()
+
+    private val _searchMatches = MutableStateFlow<List<SearchMatch>>(emptyList())
+    val searchMatches: StateFlow<List<SearchMatch>> = _searchMatches.asStateFlow()
+
+    private val _activeMatchIndex = MutableStateFlow(0)
+    val activeMatchIndex: StateFlow<Int> = _activeMatchIndex.asStateFlow()
+
+    private val _isFindPanelOpen = MutableStateFlow(false)
+    val isFindPanelOpen: StateFlow<Boolean> = _isFindPanelOpen.asStateFlow()
+
+    private val _matchCase = MutableStateFlow(false)
+    val matchCase: StateFlow<Boolean> = _matchCase.asStateFlow()
+
+    private val _wholeWord = MutableStateFlow(false)
+    val wholeWord: StateFlow<Boolean> = _wholeWord.asStateFlow()
+
+    // Auto-Save
+    private val _autoSaveStatus = MutableStateFlow<String?>(null)
+    val autoSaveStatus: StateFlow<String?> = _autoSaveStatus.asStateFlow()
+
+    private var autoSaveJob: kotlinx.coroutines.Job? = null
+
+    // Undo/Redo
+    val undoRedoManager = UndoRedoManager()
+
+    private val _canUndo = MutableStateFlow(false)
+    val canUndo: StateFlow<Boolean> = _canUndo.asStateFlow()
+
+    private val _canRedo = MutableStateFlow(false)
+    val canRedo: StateFlow<Boolean> = _canRedo.asStateFlow()
+
+    private var lastUndoPushTime = 0L
 
     // Terminal Emulator
     enum class LineType { INPUT_PROMPT, SYSTEM, OUTPUT, ERROR, SUCCESS, INFO }
@@ -438,21 +480,213 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
         val activePath = path ?: _activeTabPath.value ?: return
         val ext = activePath.substringAfterLast(".", "all")
         val theme = _activeTheme.value
+        val matches = _searchMatches.value
+        val activeIdx = _activeMatchIndex.value
         
         highlightJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.Default) {
             if (delayMs > 0) {
                 kotlinx.coroutines.delay(delayMs)
             }
-            val annotated = syntaxHighlight(content, ext, theme)
+            val annotated = syntaxHighlight(content, ext, theme, searchMatches = matches, activeMatchIndex = activeIdx)
             _highlightedContent.value = annotated
         }
+    }
+
+    private fun updateUndoRedoStates() {
+        _canUndo.value = undoRedoManager.canUndo()
+        _canRedo.value = undoRedoManager.canRedo()
+    }
+
+    private fun performAutoSave() {
+        val path = _activeTabPath.value ?: return
+        autoSaveJob?.cancel()
+        autoSaveJob = viewModelScope.launch {
+            delay(2000L)
+            _autoSaveStatus.value = "● Menyimpan..."
+            val file = repository.getFileByPath(path)
+            if (file != null) {
+                val updatedFile = file.copy(
+                    content = _activeFileContent.value,
+                    lastModified = System.currentTimeMillis()
+                )
+                repository.insertFile(updatedFile)
+                _isFileModified.value = false
+                _autoSaveStatus.value = "✓ Tersimpan"
+                delay(1000L)
+                _autoSaveStatus.value = null
+            }
+        }
+    }
+
+    fun undoEdit() {
+        val current = _activeFileContent.value
+        val previous = undoRedoManager.undo(current)
+        if (previous != null) {
+            _activeFileContent.value = previous
+            _isFileModified.value = true
+            triggerHighlight(previous, delayMs = 0L)
+            updateUndoRedoStates()
+            performAutoSave()
+        }
+    }
+
+    fun redoEdit() {
+        val current = _activeFileContent.value
+        val next = undoRedoManager.redo(current)
+        if (next != null) {
+            _activeFileContent.value = next
+            _isFileModified.value = true
+            triggerHighlight(next, delayMs = 0L)
+            updateUndoRedoStates()
+            performAutoSave()
+        }
+    }
+
+    fun openFindPanel() {
+        _isFindPanelOpen.value = true
+        performSearch()
+    }
+
+    fun closeFindPanel() {
+        _isFindPanelOpen.value = false
+    }
+
+    fun updateFindQuery(query: String) {
+        _findQuery.value = query
+        performSearch()
+    }
+
+    fun updateReplaceQuery(query: String) {
+        _replaceQuery.value = query
+    }
+
+    fun toggleMatchCase() {
+        _matchCase.value = !_matchCase.value
+        performSearch()
+    }
+
+    fun toggleWholeWord() {
+        _wholeWord.value = !_wholeWord.value
+        performSearch()
+    }
+
+    private fun performSearch() {
+        val query = _findQuery.value
+        val text = _activeFileContent.value
+        if (query.isEmpty() || text.isEmpty()) {
+            _searchMatches.value = emptyList()
+            _activeMatchIndex.value = 0
+            triggerHighlight(text, delayMs = 0L)
+            return
+        }
+
+        val matches = mutableListOf<SearchMatch>()
+        try {
+            var flags = setOf<RegexOption>()
+            if (!_matchCase.value) {
+                flags = flags + RegexOption.IGNORE_CASE
+            }
+
+            val pattern = if (_wholeWord.value) {
+                "\\b${Regex.escape(query)}\\b"
+            } else {
+                Regex.escape(query)
+            }
+
+            val regex = pattern.toRegex(flags)
+            regex.findAll(text).forEach { matchResult ->
+                matches.add(SearchMatch(matchResult.range.first, matchResult.range.last + 1))
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        _searchMatches.value = matches
+        val currentIndex = _activeMatchIndex.value
+        if (matches.isNotEmpty()) {
+            if (currentIndex >= matches.size) {
+                _activeMatchIndex.value = 0
+            }
+        } else {
+            _activeMatchIndex.value = 0
+        }
+        triggerHighlight(text, delayMs = 0L)
+    }
+
+    fun findNext() {
+        val matches = _searchMatches.value
+        if (matches.isEmpty()) return
+        val nextIndex = (_activeMatchIndex.value + 1) % matches.size
+        _activeMatchIndex.value = nextIndex
+        triggerHighlight(_activeFileContent.value, delayMs = 0L)
+    }
+
+    fun findPrevious() {
+        val matches = _searchMatches.value
+        if (matches.isEmpty()) return
+        val prevIndex = if (_activeMatchIndex.value - 1 < 0) matches.size - 1 else _activeMatchIndex.value - 1
+        _activeMatchIndex.value = prevIndex
+        triggerHighlight(_activeFileContent.value, delayMs = 0L)
+    }
+
+    fun replaceCurrent() {
+        val matches = _searchMatches.value
+        val currentIndex = _activeMatchIndex.value
+        if (matches.isEmpty() || currentIndex >= matches.size) return
+
+        val match = matches[currentIndex]
+        val text = _activeFileContent.value
+        val replaceWith = _replaceQuery.value
+
+        val newText = text.substring(0, match.start) + replaceWith + text.substring(match.end)
+        modifyActiveContent(newText)
+        
+        performSearch()
+        
+        if (_searchMatches.value.isNotEmpty()) {
+            if (_activeMatchIndex.value >= _searchMatches.value.size) {
+                _activeMatchIndex.value = 0
+            }
+        }
+        triggerHighlight(_activeFileContent.value, delayMs = 0L)
+    }
+
+    fun replaceAll(): Int {
+        val matches = _searchMatches.value
+        if (matches.isEmpty()) return 0
+
+        val text = _activeFileContent.value
+        val query = _findQuery.value
+        val replaceWith = _replaceQuery.value
+        val count = matches.size
+
+        try {
+            var flags = setOf<RegexOption>()
+            if (!_matchCase.value) {
+                flags = flags + RegexOption.IGNORE_CASE
+            }
+
+            val pattern = if (_wholeWord.value) {
+                "\\b${Regex.escape(query)}\\b"
+            } else {
+                Regex.escape(query)
+            }
+
+            val regex = pattern.toRegex(flags)
+            val newText = text.replace(regex, replaceWith)
+            modifyActiveContent(newText)
+            performSearch()
+            showMessage("Berhasil mengganti $count teks.")
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return count
     }
 
     fun openFile(path: String) {
         viewModelScope.launch {
             val file = repository.getFileByPath(path)
             if (file != null && !file.isFolder) {
-                // Check if already in tabs
                 val currentTabs = _openTabs.value.toMutableList()
                 if (!currentTabs.contains(path)) {
                     currentTabs.add(path)
@@ -466,6 +700,19 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                 loadSnippets(ext)
                 
                 triggerHighlight(file.content, delayMs = 0L, path = path)
+
+                // RESET UNDO REDO HISTORY
+                undoRedoManager.clear()
+                undoRedoManager.push(file.content)
+                updateUndoRedoStates()
+
+                // Cancel auto save
+                autoSaveJob?.cancel()
+                _autoSaveStatus.value = null
+
+                // Reset search matches when opening a new file
+                _searchMatches.value = emptyList()
+                _activeMatchIndex.value = 0
             }
         }
     }
@@ -491,6 +738,17 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
         _activeFileContent.value = newContent
         _isFileModified.value = true
         triggerHighlight(newContent, delayMs = 300L)
+
+        // UNDO REDO push with throttle 500ms
+        val now = System.currentTimeMillis()
+        if (now - lastUndoPushTime > 500L) {
+            undoRedoManager.push(newContent)
+            lastUndoPushTime = now
+            updateUndoRedoStates()
+        }
+
+        // TRIGGER AUTO-SAVE
+        performAutoSave()
     }
 
     fun saveActiveFile() {
@@ -498,6 +756,10 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val file = repository.getFileByPath(path)
             if (file != null) {
+                // Cancel ongoing autoSave when manually saved
+                autoSaveJob?.cancel()
+                _autoSaveStatus.value = null
+
                 val updatedFile = file.copy(
                     content = _activeFileContent.value,
                     lastModified = System.currentTimeMillis()
@@ -732,10 +994,16 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
+            val savedRepo = gitRepos.value.firstOrNull()?.withDecryptedCredentials()
+            val repoUrl = savedRepo?.remoteUrl ?: _repoUrlInput.value
+            val repoBranch = savedRepo?.branchName ?: _repoBranchInput.value
+            val gitUsername = savedRepo?.username ?: _gitUsernameInput.value
+            val gitToken = savedRepo?.token ?: _gitTokenInput.value
+
             addTerminalOutput("\n$ [Git Shell Controller - Realtime Remote Console]:", LineType.SYSTEM)
             when (action) {
                 "CLONE" -> {
-                    addTerminalOutput("git clone ${_repoUrlInput.value} --branch ${_repoBranchInput.value} ...", LineType.INPUT_PROMPT)
+                    addTerminalOutput("git clone $repoUrl --branch $repoBranch ...", LineType.INPUT_PROMPT)
                     addTerminalOutput("Menghubungkan ke server hosting Git dan autentikasi token...", LineType.INFO)
                     addTerminalOutput("Mengunduh metadata repositori...", LineType.OUTPUT)
                     addTerminalOutput("Unpacking objects: 100% (45/45), done.", LineType.OUTPUT)
@@ -745,7 +1013,7 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                     repository.insertFile(CodeFile(
                         path = gitFileName,
                         name = "api-connector.js",
-                        content = "// Git Cloned File\nconsole.log(\"Mengambil data API dari repositori ${_repoUrlInput.value}\");\n\nconst API_URL = \"https://api.github.com\";",
+                        content = "// Git Cloned File\nconsole.log(\"Mengambil data API dari repositori $repoUrl\");\n\nconst API_URL = \"https://api.github.com\";",
                         language = "javascript",
                         isFolder = false
                     ))
@@ -763,15 +1031,15 @@ class CodeViewModel(application: Application) : AndroidViewModel(application) {
                     addTerminalOutput("1 file diubah, +4 baris baru.", LineType.OUTPUT)
                 }
                 "PUSH" -> {
-                    addTerminalOutput("git push origin ${_repoBranchInput.value}", LineType.INPUT_PROMPT)
+                    addTerminalOutput("git push origin $repoBranch", LineType.INPUT_PROMPT)
                     addTerminalOutput("Mengkalkulasikan ukuran file kompresi...", LineType.INFO)
-                    addTerminalOutput("Auth user: ${_gitUsernameInput.value.ifEmpty { "developer" }} ... OK", LineType.INFO)
-                    addTerminalOutput("Mengunggah objek data ke ${_repoUrlInput.value}", LineType.INFO)
-                    addTerminalOutput("Pushed main -> ${_repoBranchInput.value} (SHA-1: d6ff89ea)", LineType.SUCCESS)
+                    addTerminalOutput("Auth user: ${gitUsername.ifEmpty { "developer" }} ... OK", LineType.INFO)
+                    addTerminalOutput("Mengunggah objek data ke $repoUrl", LineType.INFO)
+                    addTerminalOutput("Pushed main -> $repoBranch (SHA-1: d6ff89ea)", LineType.SUCCESS)
                     addTerminalOutput("Selamat! Kode Anda tersinkronisasi di Cloud Github/Gitlab.", LineType.SUCCESS)
                 }
                 "PULL" -> {
-                    addTerminalOutput("git pull origin ${_repoBranchInput.value}", LineType.INPUT_PROMPT)
+                    addTerminalOutput("git pull origin $repoBranch", LineType.INPUT_PROMPT)
                     addTerminalOutput("Fetching data remote origin...", LineType.INFO)
                     addTerminalOutput("Already up to date.", LineType.SUCCESS)
                 }

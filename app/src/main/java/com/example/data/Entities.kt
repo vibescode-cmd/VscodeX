@@ -39,7 +39,17 @@ data class GitRepo(
     val repoName: String,
     val remoteUrl: String,
     val branchName: String = "main",
-    val username: String = "",
-    val token: String = "",
+    val encryptedUsername: String = "",
+    val encryptedToken: String = "",
     val lastSyncTime: Long = 0L
-)
+) {
+    @Ignore var username: String = ""
+    @Ignore var token: String = ""
+}
+
+fun GitRepo.withDecryptedCredentials(): GitRepo {
+    val repo = this.copy()
+    repo.username = CredentialEncryption.decrypt(this.encryptedUsername)
+    repo.token = CredentialEncryption.decrypt(this.encryptedToken)
+    return repo
+}

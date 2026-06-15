@@ -42,7 +42,11 @@ class CodeRepository(private val codeDao: CodeDao) {
     }
 
     suspend fun insertGitRepo(repo: GitRepo) = withContext(Dispatchers.IO) {
-        codeDao.insertGitRepo(repo)
+        val encryptedRepo = repo.copy(
+            encryptedUsername = if (repo.username.isNotEmpty()) CredentialEncryption.encrypt(repo.username) else repo.encryptedUsername,
+            encryptedToken = if (repo.token.isNotEmpty()) CredentialEncryption.encrypt(repo.token) else repo.encryptedToken
+        )
+        codeDao.insertGitRepo(encryptedRepo)
     }
 
     suspend fun deleteGitRepo(repo: GitRepo) = withContext(Dispatchers.IO) {
